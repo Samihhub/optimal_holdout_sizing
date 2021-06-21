@@ -118,9 +118,10 @@ gen_resp <- function(X, coefs = NA, coefs_sd = 1, retprobs = FALSE) {
 split_data <- function(X, frac) {
   # Returns a mask for the observations belonging in the training (holdout) set
   nobs <- dim(X)[1]
-  mask <- sample(FALSE, nobs, replace = TRUE)
+  mask <- rep(FALSE, nobs) #sample(FALSE, nobs, replace = TRUE)
   train_lim <- floor(nobs * frac)
   mask[1:train_lim] <- TRUE
+  mask <- sample(mask)
   return(mask)
 }
 
@@ -177,64 +178,72 @@ newdata <- gen_resp(X, coefs_sd = 6)
 Y <- newdata$classes
 coefs <- newdata$coefs
 
+
+######### CHECK THIS
+#mask=mask[order(runif(length(mask)))]
+#mask = sample(mask) ?? sample permutes if no other params
+
+
+
+
 for (i in 1:num_sizes) {
-#  thresh <- 0.5
-#  pat_data <- cbind(X, Y)
-#  pat_data["Y"] <- lapply(pat_data["Y"], factor)
-#  
-#  mask <- split_data(pat_data, frac_ho[i])
-#  data_interv <- pat_data[!mask,]
-#  data_hold <- pat_data[mask,]
-#  
-#  # Calculate optimal threshold
-#  indices <- sample(1:nrow(data_hold))
-#  folds <- cut(1:length(indices), breaks = k, labels = FALSE) # Mask to partition data in CV analysis
-#  cost_tot <- numeric(num_thresh)
-#  
-#  for (f in 1:k) {
-#    # Train model for each fold of CV, then scan all probs to find loss
-#    val_indices <- folds == f
-#    val_data <- data_hold[val_indices,]
-#    partial_train_data <- data_hold[!val_indices,]
-#    
-#    thresh_model <- glm(Y ~ ., data = partial_train_data, 
-#                     family = binomial(link = "logit"))
-#    
-#    thresh_pred <- predict(thresh_model, newdata = val_data, 
-#                           type = "response")
-#    
-#    for(p in 1:num_thresh){
-#      num_tn <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred < prob_vals[p]))
-#      num_fn <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred < prob_vals[p]))
-#      num_fp <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred >= prob_vals[p]))
-#      num_tp <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred >= prob_vals[p]))
-#      
-#      cost_tot[p] <- cost_tot[p] + c_tn * num_tn + 
-#        c_tp * num_tp + 
-#        c_fn * num_fn + 
-#        c_fp * num_fp
-#    }
-#  }
-#  
-#  # Rescale loss
-#  cost_tot <- cost_tot / k
-#  
-#  # Minimise loss to find classif threshold
-#  thresh <- prob_vals[which.min(cost_tot)]
-#  
-#  # Predict
-#  glm_model <- glm(Y ~ ., data = data_hold, 
-#                   family = binomial(link = "logit"))
-#  glm_pred <- predict(glm_model, newdata = data_interv, type = "response")
-#  class_pred <- ifelse(glm_pred > thresh, '1', '0')
-#  
-#  # Dr is an oracle for the first predictor and blind for the rest of them
-#  dr_pred <- oracle_pred(data_hold, coefs)
-#  
-#  
-#  # Those with disease, predicted not to die, will die
-#  deaths_inter[i] <- sum(data_interv$Y == 1 & class_pred != 1)
-#  deaths_ho[i] <- sum(data_hold$Y == 1 & dr_pred != 1)
+  #  thresh <- 0.5
+  #  pat_data <- cbind(X, Y)
+  #  pat_data["Y"] <- lapply(pat_data["Y"], factor)
+  #  
+  #  mask <- split_data(pat_data, frac_ho[i])
+  #  data_interv <- pat_data[!mask,]
+  #  data_hold <- pat_data[mask,]
+  #  
+  #  # Calculate optimal threshold
+  #  indices <- sample(1:nrow(data_hold))
+  #  folds <- cut(1:length(indices), breaks = k, labels = FALSE) # Mask to partition data in CV analysis
+  #  cost_tot <- numeric(num_thresh)
+  #  
+  #  for (f in 1:k) {
+  #    # Train model for each fold of CV, then scan all probs to find loss
+  #    val_indices <- folds == f
+  #    val_data <- data_hold[val_indices,]
+  #    partial_train_data <- data_hold[!val_indices,]
+  #    
+  #    thresh_model <- glm(Y ~ ., data = partial_train_data, 
+  #                     family = binomial(link = "logit"))
+  #    
+  #    thresh_pred <- predict(thresh_model, newdata = val_data, 
+  #                           type = "response")
+  #    
+  #    for(p in 1:num_thresh){
+  #      num_tn <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred < prob_vals[p]))
+  #      num_fn <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred < prob_vals[p]))
+  #      num_fp <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred >= prob_vals[p]))
+  #      num_tp <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred >= prob_vals[p]))
+  #      
+  #      cost_tot[p] <- cost_tot[p] + c_tn * num_tn + 
+  #        c_tp * num_tp + 
+  #        c_fn * num_fn + 
+  #        c_fp * num_fp
+  #    }
+  #  }
+  #  
+  #  # Rescale loss
+  #  cost_tot <- cost_tot / k
+  #  
+  #  # Minimise loss to find classif threshold
+  #  thresh <- prob_vals[which.min(cost_tot)]
+  #  
+  #  # Predict
+  #  glm_model <- glm(Y ~ ., data = data_hold, 
+  #                   family = binomial(link = "logit"))
+  #  glm_pred <- predict(glm_model, newdata = data_interv, type = "response")
+  #  class_pred <- ifelse(glm_pred > thresh, '1', '0')
+  #  
+  #  # Dr is an oracle for the first predictor and blind for the rest of them
+  #  dr_pred <- oracle_pred(data_hold, coefs)
+  #  
+  #  
+  #  # Those with disease, predicted not to die, will die
+  #  deaths_inter[i] <- sum(data_interv$Y == 1 & class_pred != 1)
+  #  deaths_ho[i] <- sum(data_hold$Y == 1 & dr_pred != 1)
   
   # Bootstrapping loop, the iteration 0 uses the whole dataset to calculate the
   # estimates of the predictions.
@@ -327,12 +336,12 @@ deaths_boot_tot <- deaths_boot_ho + deaths_boot_inter
 deaths_sd <- apply(deaths_boot_tot, 2, sd)
 
 plot(frac_ho, deaths_per_frac,
-#plot(costs, deaths_inter,
+     #plot(costs, deaths_inter,
      pch = 16,
      ylab = "Deaths",
      xlab = "Holdout set size",
      #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
-    ylim = c(0, max(deaths_per_frac + deaths_sd)))
+     ylim = c(0, max(deaths_per_frac + deaths_sd)))
 
 points(frac_ho, deaths_inter, pch = 16, col = 2)
 
