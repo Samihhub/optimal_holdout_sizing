@@ -88,7 +88,7 @@ split_data <- function(X, frac) {
 
 
 
-# -----------------------------#
+# -----------------------------------------------------------------------------#
 #### Dynamics of the system ####
 
 ## Set seed for reproducibility
@@ -268,49 +268,48 @@ deaths_per_frac <- deaths_ho + deaths_inter
 deaths_boot_tot <- deaths_boot_ho + deaths_boot_inter
 deaths_sd <- apply(deaths_boot_tot, 2, sd)
 
-plot(frac_ho, deaths_per_frac,
+
+# -----------------------------------------------------------------------------#
+#### Plot ####
+
+plot(frac_ho, deaths_per_frac, type = "n", 
      #plot(costs, deaths_inter,
      pch = 16,
      ylab = "Deaths",
      xlab = "Holdout set size",
      #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
-     ylim = c(min(deaths_inter), max(deaths_per_frac + deaths_sd)))
+     ylim = range(c(deaths_per_frac - deaths_sd, deaths_per_frac + deaths_sd), na.rm=T))
 
-points(frac_ho, deaths_inter, pch = 16, col = 2)
+points(frac_ho, colMeans(deaths_boot_tot, na.rm = T), pch = 16, col = 2)
 
+q1 = 0.05; q2 = 0.95
 arrows(frac_ho, 
-       deaths_per_frac - deaths_sd,
+       apply(deaths_boot_tot, 2, function(x) quantile(x, q1, na.rm = T)), 
        frac_ho,
-       deaths_per_frac + deaths_sd, 
-       length=0.05, angle=90, code=3)
+       apply(deaths_boot_tot, 2, function(x) quantile(x, q2, na.rm = T)),
+       length = 0.05, angle = 90, code = 3)
 
 
-#### Test James' code ####
-### QUESTIONS:
-# Why [1:77] in points?
-# 
-
-plot(frac_ho, deaths_per_frac,type="n", 
-     #plot(costs, deaths_inter,
-     pch = 16,
-     ylab = "Deaths",
-     xlab = "Holdout set size",
-     #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
-     ylim = range(c(deaths_per_frac - deaths_sd,deaths_per_frac + deaths_sd),na.rm=T))
-
-points(frac_ho, colMeans(deaths_boot_tot,na.rm=T), pch = 16, col = 2)
-
-q1=0.05; q2=0.95
-arrows(frac_ho, 
-       apply(deaths_boot_tot,2,function(x) quantile(x,q1,na.rm=T)), 
-       frac_ho,
-       apply(deaths_boot_tot,2,function(x) quantile(x,q2,na.rm=T)),
-       length=0.05, angle=90, code=3)
+#plot(frac_ho, deaths_per_frac,
+#     #plot(costs, deaths_inter,
+#     pch = 16,
+#     ylab = "Deaths",
+#     xlab = "Holdout set size",
+#     #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
+#     ylim = c(min(deaths_inter), max(deaths_per_frac + deaths_sd)))
+#
+#points(frac_ho, deaths_inter, pch = 16, col = 2)
+#
+#arrows(frac_ho, 
+#       deaths_per_frac - deaths_sd,
+#       frac_ho,
+#       deaths_per_frac + deaths_sd, 
+#       length = 0.05, angle = 90, code = 3)
 
 
 
-
-#### ---- Debugging snippets ---- ####
+# -----------------------------------------------------------------------------#
+#### Debugging snippets ####
 
 ###### Snippet for hist of probs
 set.seed(100)  
