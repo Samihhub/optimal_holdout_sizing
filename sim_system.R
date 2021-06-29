@@ -23,16 +23,19 @@ logistic <- function(x) 1/(1 + exp(-x))
 logit <- function(x) -log(1/x - 1)
 
 # Estimate Dr's predictions
-oracle_pred <- function(X, coefs){
-  #Dr is oracle to the first predictor and blind to the other ones.
-  X <- X %>% select(1, 2)
+oracle_pred <- function(X, coefs, num_vars = 2){
+  # We model Dr behaviour as an oracle that knows the true relationship between
+  # predictors and responses, and limit its power by restricting the number of
+  # predictors Drs have access to.
+  X <- X %>% select(all_of(1:num_vars))
   nobs <- dim(X)[1]
-  coefs <- coefs[1:2]
+  coefs <- coefs[1:num_vars]
   
   # Trying adding noise to make it harder for dr
   lin_comb <- rowSums(t(t(X) * coefs))
   probs <- round(logistic(lin_comb))# + rnorm(nobs, sd = 0.2))
   # Now check that the noise hasn't spoiled probabilities
+  # WITHOUT NOISE, THIS SHOULDN'T BE NEEDED (doesn't change anything tho)
   probs[which(probs > 1)] = 1
   probs[which(probs < 0)] = 0
   
@@ -99,6 +102,10 @@ boots <- 100      # Number of bootstrap resamplings
 nobs <- 5000                      # Number of observations, i.e patients
 nobs_boot <- 5000         # Number of observations to resample in each bootstrap iter
 npreds <- 7                    # Number of predictors
+max_dr_vars <- 5 # When testing different Dr predictive powers, maximum power to be tested
+
+if(max_dr_vars > npreds) stop("max_dr_vars cannot be larger than npreds")
+
 
 # Definition of holdout set sizes to test
 min_frac <- 0.02
@@ -136,7 +143,7 @@ deaths_inter <- deaths_ho <- seq()
 
 
 # Initialise Progress Bar
-#if (exists(prog_bar)) rm(prog_bar)
+#if (exists("prog_bar")) rm(prog_bar)
 #prog_bar <- progress_bar$new()
 old_progress <- 0
 
@@ -149,130 +156,160 @@ Y <- newdata$classes
 coefs <- newdata$coefs
 
 
+# Arrays to store data from sweeping through Dr's different powers
+deaths_per_frac <- array(0, dim = c(max_dr_vars, num_sizes))
+deaths_boot_tot <- array(0, dim = c(max_dr_vars, boots, num_sizes))
+deaths_sd <- array(0, dim = c(max_dr_vars, num_sizes))
 
-for (i in 1:num_sizes) {
-  # b=0 is the point estimate, b>0 are bootstrap samples
-  for (b in 0:boots) {
-    progress <- 100 * (((i - 1) * boots) + b) / (num_sizes * (boots + 1))
-    
-    if (abs(floor(old_progress) - floor(progress)) > 0) {
-      cat(floor(progress), "%\n")
-      #for(aux in 1:abs(floor(old_progress) - floor(progress))) prog_bar$tick()
-    }
-    
-    set.seed(b + i*boots)
-    thresh <- 0.5 # Decision boundary
-    
-    # Resample Patient data
-    if (b) {
-      samp_mask <- sample(1:nobs, nobs_boot, replace = TRUE) # mask to resample data
-      pat_data <- cbind(X, Y)[samp_mask,]
-    } else pat_data <- cbind(X, Y)
-    
-    pat_data["Y"] <- lapply(pat_data["Y"], factor)
-    
-    # For each holdout size, split data into intervention and holdout set
-    mask <- split_data(pat_data, frac_ho[i])
-    data_interv <- pat_data[!mask,]
-    data_hold <- pat_data[mask,]
-    
-    # Calculate optimal threshold
-    indices <- sample(1:nrow(data_hold))
-    folds <- cut(1:length(indices), breaks = k, labels = FALSE) # Mask to partition data in CV analysis
-    cost_tot <- numeric(num_thresh)
-    
-    for (f in 1:k) {
-      # Train model for each fold of CV, then scan all probs to find loss
-      val_indices <- folds == f
-      val_data <- data_hold[val_indices,]
-      partial_train_data <- data_hold[!val_indices,]
+
+
+for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
+  for (i in 1:num_sizes) {  # for each, sweep through h.o. set sizes of interest
+    for (b in 0:boots) {  # b=0 is the point estimate, b>0 are bootstrap samples
       
-      thresh_model <- glm(Y ~ ., data = partial_train_data, 
-                          family = binomial(link = "logit"))
+      progress <- 100 * (((i - 1) * boots) + b) / (num_sizes * (boots + 1))
       
-      thresh_pred <- predict(thresh_model, newdata = val_data, 
-                             type = "response")
+      if (abs(floor(old_progress) - floor(progress)) > 0) {
+        cat(floor(progress), "%\n")
+        #for(aux in 1:abs(floor(old_progress) - floor(progress))) prog_bar$tick()
+      }
       
-      for(p in 1:num_thresh){
-        num_tn <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred < prob_vals[p]))
-        num_fn <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred < prob_vals[p]))
-        num_fp <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred >= prob_vals[p]))
-        num_tp <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred >= prob_vals[p]))
+      set.seed(b + i*boots)
+      thresh <- 0.5 # Decision boundary
+      
+      # Resample Patient data
+      if (b) {
+        samp_mask <- sample(1:nobs, nobs_boot, replace = TRUE) # mask to resample data
+        pat_data <- cbind(X, Y)[samp_mask,]
+      } else pat_data <- cbind(X, Y)
+      
+      pat_data["Y"] <- lapply(pat_data["Y"], factor)
+      
+      # For each holdout size, split data into intervention and holdout set
+      mask <- split_data(pat_data, frac_ho[i])
+      data_interv <- pat_data[!mask,]
+      data_hold <- pat_data[mask,]
+      
+      # Calculate optimal threshold
+      indices <- sample(1:nrow(data_hold))
+      folds <- cut(1:length(indices), breaks = k, labels = FALSE) # Mask to partition data in CV analysis
+      cost_tot <- numeric(num_thresh)
+      
+      for (f in 1:k) {
+        # Train model for each fold of CV, then scan all probs to find loss
+        val_indices <- folds == f
+        val_data <- data_hold[val_indices,]
+        partial_train_data <- data_hold[!val_indices,]
         
-        cost_tot[p] <- cost_tot[p] + c_tn * num_tn + 
-          c_tp * num_tp + 
-          c_fn * num_fn + 
-          c_fp * num_fp
+        thresh_model <- glm(Y ~ ., data = partial_train_data, 
+                            family = binomial(link = "logit"))
+        
+        thresh_pred <- predict(thresh_model, newdata = val_data, 
+                               type = "response")
+        
+        for(p in 1:num_thresh){
+          num_tn <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred < prob_vals[p]))
+          num_fn <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred < prob_vals[p]))
+          num_fp <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred >= prob_vals[p]))
+          num_tp <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred >= prob_vals[p]))
+          
+          cost_tot[p] <- cost_tot[p] + c_tn * num_tn + 
+            c_tp * num_tp + 
+            c_fn * num_fn + 
+            c_fp * num_fp
+        }
       }
-    }
-    
-    # Rescale loss
-    cost_tot <- cost_tot / k
-    
-    
-    # THIS NEEDS REWRITTING!!!!!!!!!
-    # CURRENT COSTS ARE CALCULATED WITH THRESHOLD ESTIMATION, EVEN WHEN FLAG IS OFF
-    # Train model
-    glm_model <- glm(Y ~ ., data = data_hold, 
-                     family = binomial(link = "logit"))
-    thresh <- ifelse(set_thresh, prob_vals[which.min(cost_tot)], 0.5)
-    if (b) costs_boot[b, i] <- min(cost_tot) else costs <- min(cost_tot)
-    
-    # Predict
-    glm_pred <- predict(glm_model, newdata = data_interv, type = "response")
-    class_pred <- ifelse(glm_pred > thresh, '1', '0')
-    
-    # Dr is an oracle for the first predictor and blind for the rest of them
-    dr_pred <- oracle_pred(data_hold, coefs)
-    
-    
-    # Those with disease, predicted not to die, will die
-    # This if clause calculates the cost for each h.o. set size 
-    # as the number of deaths for each of them
-    
-    if (cost_type == "deaths"){
-      if (b){
-        deaths_boot_inter[b, i] <- sum(data_interv$Y == 1 & class_pred != 1)
-        deaths_boot_ho[b, i] <- sum(data_hold$Y == 1 & dr_pred != 1)
-      } else {
-        deaths_inter[i] <- sum(data_interv$Y == 1 & class_pred != 1)
-        deaths_ho[i] <- sum(data_hold$Y == 1 & dr_pred != 1)
-      }
-    }
-    
-    
-    # Alternatively, use a generalised cost function with a specific cost for
-    # each of fn, fp, tp and tn
-    if (cost_type == "gen_cost"){
-      # Generate confusion matrices
-      confus_inter <- table(factor(data_interv$Y, levels=0:1), 
-                             factor(class_pred, levels=0:1))
       
-      confus_hold <- table(factor(data_hold$Y, levels=0:1), 
-                           factor(dr_pred, levels=0:1))
+      # Rescale loss
+      cost_tot <- cost_tot / k
       
-      if (b){
-        deaths_boot_inter[b, i] <- sum(confus_inter * cost_mat)
-        deaths_boot_ho[b, i] <- sum(confus_hold * cost_mat)
-      } else {
-        deaths_inter[i] <- sum(confus_inter * cost_mat)
-        deaths_ho[i] <- sum(confus_hold * cost_mat)
+      
+      # THIS NEEDS REWRITTING!!!!!!!!!
+      # CURRENT COSTS ARE CALCULATED WITH THRESHOLD ESTIMATION, EVEN WHEN FLAG IS OFF
+      # Train model
+      glm_model <- glm(Y ~ ., data = data_hold, 
+                       family = binomial(link = "logit"))
+      thresh <- ifelse(set_thresh, prob_vals[which.min(cost_tot)], 0.5)
+      if (b) costs_boot[b, i] <- min(cost_tot) else costs <- min(cost_tot)
+      
+      # Predict
+      glm_pred <- predict(glm_model, newdata = data_interv, type = "response")
+      class_pred <- ifelse(glm_pred > thresh, '1', '0')
+      
+      # Dr is an oracle for the first predictor and blind for the rest of them
+      dr_pred <- oracle_pred(data_hold, coefs, num_vars = dr_vars)
+      
+      
+      # Those with disease, predicted not to die, will die
+      # This if clause calculates the cost for each h.o. set size 
+      # as the number of deaths for each of them
+      
+      if (cost_type == "deaths"){
+        if (b){
+          deaths_boot_inter[b, i] <- sum(data_interv$Y == 1 & class_pred != 1)
+          deaths_boot_ho[b, i] <- sum(data_hold$Y == 1 & dr_pred != 1)
+        } else {
+          deaths_inter[i] <- sum(data_interv$Y == 1 & class_pred != 1)
+          deaths_ho[i] <- sum(data_hold$Y == 1 & dr_pred != 1)
+        }
       }
+      
+      
+      # Alternatively, use a generalised cost function with a specific cost for
+      # each of fn, fp, tp and tn
+      if (cost_type == "gen_cost"){
+        # Generate confusion matrices
+        confus_inter <- table(factor(data_interv$Y, levels=0:1), 
+                               factor(class_pred, levels=0:1))
+        
+        confus_hold <- table(factor(data_hold$Y, levels=0:1), 
+                             factor(dr_pred, levels=0:1))
+        
+        if (b){
+          deaths_boot_inter[b, i] <- sum(confus_inter * cost_mat)
+          deaths_boot_ho[b, i] <- sum(confus_hold * cost_mat)
+        } else {
+          deaths_inter[i] <- sum(confus_inter * cost_mat)
+          deaths_ho[i] <- sum(confus_hold * cost_mat)
+        }
+      }
+      
+      old_progress <- progress
     }
-    
-    old_progress <- progress
   }
+  
+  deaths_per_frac[dr_vars, ] <- deaths_ho + deaths_inter
+  deaths_boot_tot[dr_vars, ,] <- deaths_boot_ho + deaths_boot_inter
+  deaths_sd[dr_vars, ] <- apply(deaths_boot_tot[dr_vars,,], 2, sd)
 }
 
-deaths_per_frac <- deaths_ho + deaths_inter
-deaths_boot_tot <- deaths_boot_ho + deaths_boot_inter
-deaths_sd <- apply(deaths_boot_tot, 2, sd)
+#deaths_per_frac <- deaths_ho + deaths_inter
+#deaths_boot_tot <- deaths_boot_ho + deaths_boot_inter
+#deaths_sd <- apply(deaths_boot_tot, 2, sd)
 
 
 # -----------------------------------------------------------------------------#
 #### Plot ####
 
-plot(frac_ho, deaths_per_frac, type = "n", 
+#plot(frac_ho, deaths_per_frac, type = "n", 
+#     #plot(costs, deaths_inter,
+#     pch = 16,
+#     ylab = "Deaths",
+#     xlab = "Holdout set size",
+#     #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
+#     ylim = range(c(deaths_per_frac - deaths_sd, deaths_per_frac + deaths_sd), na.rm=T))
+#
+#points(frac_ho, colMeans(deaths_boot_tot, na.rm = T), pch = 16, col = 2)
+#
+#q1 = 0.05; q2 = 0.95
+#arrows(frac_ho, 
+#       apply(deaths_boot_tot, 2, function(x) quantile(x, q1, na.rm = T)), 
+#       frac_ho,
+#       apply(deaths_boot_tot, 2, function(x) quantile(x, q2, na.rm = T)),
+#       length = 0.05, angle = 90, code = 3)
+
+# Test for multiple powers
+plot(frac_ho, deaths_per_frac[1,], type = "n", 
      #plot(costs, deaths_inter,
      pch = 16,
      ylab = "Deaths",
@@ -280,16 +317,14 @@ plot(frac_ho, deaths_per_frac, type = "n",
      #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
      ylim = range(c(deaths_per_frac - deaths_sd, deaths_per_frac + deaths_sd), na.rm=T))
 
-points(frac_ho, colMeans(deaths_boot_tot, na.rm = T), pch = 16, col = 2)
+for (dr_vars in 1:max_dr_vars) {
+  points(frac_ho, 
+         colMeans(deaths_boot_tot[dr_vars, , ], na.rm = T), 
+         pch = 16, 
+         col = dr_vars)
+}
 
-q1 = 0.05; q2 = 0.95
-arrows(frac_ho, 
-       apply(deaths_boot_tot, 2, function(x) quantile(x, q1, na.rm = T)), 
-       frac_ho,
-       apply(deaths_boot_tot, 2, function(x) quantile(x, q2, na.rm = T)),
-       length = 0.05, angle = 90, code = 3)
-
-
+# Plot using point estimates
 #plot(frac_ho, deaths_per_frac,
 #     #plot(costs, deaths_inter,
 #     pch = 16,
