@@ -27,9 +27,24 @@ oracle_pred <- function(X, coefs, num_vars = 2){
   # We model Dr behaviour as an oracle that knows the true relationship between
   # predictors and responses, and limit its power by restricting the number of
   # predictors Drs have access to.
-  X <- X %>% select(all_of(1:num_vars))
-  nobs <- dim(X)[1]
-  coefs <- coefs[1:num_vars]
+  
+  if ("Y" %in% colnames(X)) {
+    X <- X %>% select(-Y)
+  }
+  
+  noise <- TRUE
+  if (!noise) {
+    X <- X %>% select(all_of(1:num_vars))
+    nobs <- dim(X)[1]
+    coefs <- coefs[1:num_vars]
+  } 
+  else {
+    nobs <- dim(X)[1]
+    npreds <- dim(X)[2]
+    coefs <- coefs + rnorm(npreds, sd = (num_vars - 1))
+  }
+  
+  
   
   # Trying adding noise to make it harder for dr
   lin_comb <- rowSums(t(t(X) * coefs))
@@ -102,8 +117,8 @@ boots <- 100      # Number of bootstrap resamplings
 nobs <- 5000                      # Number of observations, i.e patients
 nobs_boot <- 5000         # Number of observations to resample in each bootstrap iter
 npreds <- 7                    # Number of predictors
-max_dr_vars <- 5 # When testing different Dr predictive powers, maximum power to be tested
 
+max_dr_vars <- 5 # When testing different Dr predictive powers, maximum power to be tested
 if(max_dr_vars > npreds) stop("max_dr_vars cannot be larger than npreds")
 
 
@@ -312,7 +327,7 @@ for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
 plot(frac_ho, deaths_per_frac[1,], type = "n", 
      #plot(costs, deaths_inter,
      pch = 16,
-     ylab = "Deaths",
+     ylab = "Cost",
      xlab = "Holdout set size",
      #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
      ylim = range(c(deaths_per_frac - deaths_sd, deaths_per_frac + deaths_sd), na.rm=T))
@@ -323,6 +338,9 @@ for (dr_vars in 1:max_dr_vars) {
          pch = 16, 
          col = dr_vars)
 }
+
+legend("topleft", legend = 1:max_dr_vars, 
+       fill = 1:max_dr_vars, title = "sd")
 
 # Plot using point estimates
 #plot(frac_ho, deaths_per_frac,
