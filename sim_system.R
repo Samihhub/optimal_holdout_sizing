@@ -41,7 +41,7 @@ oracle_pred <- function(X, coefs, num_vars = 2){
   else {
     nobs <- dim(X)[1]
     npreds <- dim(X)[2]
-    coefs <- coefs + rnorm(npreds, sd = (num_vars - 1))
+    coefs <- coefs + rnorm(npreds, sd = 2 ** (num_vars - 1))
   }
   
   
@@ -61,8 +61,8 @@ oracle_pred <- function(X, coefs, num_vars = 2){
 # Generate the predictors matrix
 gen_preds <- function(nobs, npreds) {
   # Generate gaussian covariates matrix
-  X_vals <- as.data.frame(matrix( rnorm(nobs * npreds), nobs, npreds))
-  return(X_vals)
+  X <- as.data.frame(matrix( rnorm(nobs * npreds), nobs, npreds))
+  return(X)
 }
 
 
@@ -100,7 +100,7 @@ split_data <- function(X, frac) {
   mask <- rep(FALSE, nobs) #sample(FALSE, nobs, replace = TRUE)
   train_lim <- floor(nobs * frac)
   mask[1:train_lim] <- TRUE
-  mask <- sample(mask)
+  mask <- sample(mask)  # Shuffle to avoid correlation between sizes
   return(mask)
 }
 
@@ -176,6 +176,8 @@ deaths_per_frac <- array(0, dim = c(max_dr_vars, num_sizes))
 deaths_boot_tot <- array(0, dim = c(max_dr_vars, boots, num_sizes))
 deaths_sd <- array(0, dim = c(max_dr_vars, num_sizes))
 
+
+### ATTENTION!!! TOO INEFFICIENT, NO NEED TO LOOP ON EVERYTHING, JUST ON DRS PREDS
 
 
 for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
@@ -339,7 +341,7 @@ for (dr_vars in 1:max_dr_vars) {
          col = dr_vars)
 }
 
-legend("topleft", legend = 1:max_dr_vars, 
+legend("topleft", legend = (2 ** (0:(max_dr_vars - 1))), 
        fill = 1:max_dr_vars, title = "sd")
 
 # Plot using point estimates
