@@ -32,7 +32,7 @@ oracle_pred <- function(X, coefs, num_vars = 2){
     X <- X %>% select(-Y)
   }
   
-  noise <- TRUE
+  noise <- FALSE
   if (!noise) {
     X <- X %>% select(all_of(1:num_vars))
     nobs <- dim(X)[1]
@@ -118,13 +118,16 @@ nobs <- 5000                      # Number of observations, i.e patients
 nobs_boot <- 5000         # Number of observations to resample in each bootstrap iter
 npreds <- 7                    # Number of predictors
 
-max_dr_vars <- 5 # When testing different Dr predictive powers, maximum power to be tested
+max_dr_vars <- 1 # When testing different Dr predictive powers, maximum power to be tested
+run_many_powers <- FALSE # Flag for analysing several Dr powers at once
 if(max_dr_vars > npreds) stop("max_dr_vars cannot be larger than npreds")
+if(max_dr_vars > 1 && !run_many_powers) stop("Flag set to run only 1 power, but max_dr_vars > 1")
+if(max_dr_vars == 1 && run_many_powers) stop("Flag set to run many powers, but max_dr_vars = 1")
 
 
 # Definition of holdout set sizes to test
 min_frac <- 0.02
-max_frac <- 0.2
+max_frac <- 0.15
 num_sizes <- 50
 
 
@@ -178,91 +181,91 @@ deaths_sd <- array(0, dim = c(max_dr_vars, num_sizes))
 
 
 ### ATTENTION!!! TOO INEFFICIENT, NO NEED TO LOOP ON EVERYTHING, JUST ON DRS PREDS
-
-
-for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
-  for (i in 1:num_sizes) {  # for each, sweep through h.o. set sizes of interest
-    for (b in 0:boots) {  # b=0 is the point estimate, b>0 are bootstrap samples
+for (i in 1:num_sizes) {  # for each, sweep through h.o. set sizes of interest
+  for (b in 0:boots) {  # b=0 is the point estimate, b>0 are bootstrap samples
+    
+    progress <- 100 * (((i - 1) * boots) + b) / (num_sizes * (boots + 1))
+    
+    if (abs(floor(old_progress) - floor(progress)) > 0) {
+      cat(floor(progress), "%\n")
+      #for(aux in 1:abs(floor(old_progress) - floor(progress))) prog_bar$tick()
+    }
+    
+    set.seed(b + i*boots)
+    thresh <- 0.5 # Decision boundary
+    
+    # Resample Patient data
+    if (b) {
+      samp_mask <- sample(1:nobs, nobs_boot, replace = TRUE) # mask to resample data
+      pat_data <- cbind(X, Y)[samp_mask,]
+    } else pat_data <- cbind(X, Y)
+    
+    pat_data["Y"] <- lapply(pat_data["Y"], factor)
+    
+    # For each holdout size, split data into intervention and holdout set
+    mask <- split_data(pat_data, frac_ho[i])
+    data_interv <- pat_data[!mask,]
+    data_hold <- pat_data[mask,]
+    
+    # Calculate optimal threshold
+    indices <- sample(1:nrow(data_hold))
+    folds <- cut(1:length(indices), breaks = k, labels = FALSE) # Mask to partition data in CV analysis
+    cost_tot <- numeric(num_thresh)
+    
+    for (f in 1:k) {
+      # Train model for each fold of CV, then scan all probs to find loss
+      val_indices <- folds == f
+      val_data <- data_hold[val_indices,]
+      partial_train_data <- data_hold[!val_indices,]
       
-      progress <- 100 * (((i - 1) * boots) + b) / (num_sizes * (boots + 1))
+      thresh_model <- glm(Y ~ ., data = partial_train_data, 
+                          family = binomial(link = "logit"))
       
-      if (abs(floor(old_progress) - floor(progress)) > 0) {
-        cat(floor(progress), "%\n")
-        #for(aux in 1:abs(floor(old_progress) - floor(progress))) prog_bar$tick()
+      thresh_pred <- predict(thresh_model, newdata = val_data, 
+                             type = "response")
+      
+      for(p in 1:num_thresh) {
+        num_tn <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred < prob_vals[p]))
+        num_fn <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred < prob_vals[p]))
+        num_fp <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred >= prob_vals[p]))
+        num_tp <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred >= prob_vals[p]))
+        
+        cost_tot[p] <- cost_tot[p] + c_tn * num_tn + 
+          c_tp * num_tp + 
+          c_fn * num_fn + 
+          c_fp * num_fp
       }
-      
-      set.seed(b + i*boots)
-      thresh <- 0.5 # Decision boundary
-      
-      # Resample Patient data
-      if (b) {
-        samp_mask <- sample(1:nobs, nobs_boot, replace = TRUE) # mask to resample data
-        pat_data <- cbind(X, Y)[samp_mask,]
-      } else pat_data <- cbind(X, Y)
-      
-      pat_data["Y"] <- lapply(pat_data["Y"], factor)
-      
-      # For each holdout size, split data into intervention and holdout set
-      mask <- split_data(pat_data, frac_ho[i])
-      data_interv <- pat_data[!mask,]
-      data_hold <- pat_data[mask,]
-      
-      # Calculate optimal threshold
-      indices <- sample(1:nrow(data_hold))
-      folds <- cut(1:length(indices), breaks = k, labels = FALSE) # Mask to partition data in CV analysis
-      cost_tot <- numeric(num_thresh)
-      
-      for (f in 1:k) {
-        # Train model for each fold of CV, then scan all probs to find loss
-        val_indices <- folds == f
-        val_data <- data_hold[val_indices,]
-        partial_train_data <- data_hold[!val_indices,]
-        
-        thresh_model <- glm(Y ~ ., data = partial_train_data, 
-                            family = binomial(link = "logit"))
-        
-        thresh_pred <- predict(thresh_model, newdata = val_data, 
-                               type = "response")
-        
-        for(p in 1:num_thresh){
-          num_tn <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred < prob_vals[p]))
-          num_fn <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred < prob_vals[p]))
-          num_fp <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred >= prob_vals[p]))
-          num_tp <- sum(as.numeric(val_data["Y"] == 1) & as.numeric(thresh_pred >= prob_vals[p]))
-          
-          cost_tot[p] <- cost_tot[p] + c_tn * num_tn + 
-            c_tp * num_tp + 
-            c_fn * num_fn + 
-            c_fp * num_fp
-        }
-      }
-      
-      # Rescale loss
-      cost_tot <- cost_tot / k
-      
-      
-      # THIS NEEDS REWRITTING!!!!!!!!!
-      # CURRENT COSTS ARE CALCULATED WITH THRESHOLD ESTIMATION, EVEN WHEN FLAG IS OFF
-      # Train model
-      glm_model <- glm(Y ~ ., data = data_hold, 
-                       family = binomial(link = "logit"))
-      thresh <- ifelse(set_thresh, prob_vals[which.min(cost_tot)], 0.5)
-      if (b) costs_boot[b, i] <- min(cost_tot) else costs <- min(cost_tot)
-      
-      # Predict
-      glm_pred <- predict(glm_model, newdata = data_interv, type = "response")
-      class_pred <- ifelse(glm_pred > thresh, '1', '0')
-      
+    }
+    
+    # Rescale loss
+    cost_tot <- cost_tot / k
+    
+    
+    # THIS NEEDS REWRITTING!!!!!!!!!
+    # CURRENT COSTS ARE CALCULATED WITH THRESHOLD ESTIMATION, EVEN WHEN FLAG IS OFF
+    # Train model
+    glm_model <- glm(Y ~ ., data = data_hold, 
+                     family = binomial(link = "logit"))
+    thresh <- ifelse(set_thresh, prob_vals[which.min(cost_tot)], 0.5)
+    if (b) costs_boot[b, i] <- min(cost_tot) else costs <- min(cost_tot)
+    
+    # Predict
+    glm_pred <- predict(glm_model, newdata = data_interv, type = "response")
+    class_pred <- ifelse(glm_pred > thresh, '1', '0')
+    
+    
+    for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
       # Dr is an oracle for the first predictor and blind for the rest of them
-      dr_pred <- oracle_pred(data_hold, coefs, num_vars = dr_vars)
+      if (run_many_powers) dr_pred <- oracle_pred(data_hold, coefs, num_vars = dr_vars)
+      else dr_pred <- oracle_pred(data_hold, coefs)
       
       
       # Those with disease, predicted not to die, will die
-      # This if clause calculates the cost for each h.o. set size 
+      # This "if clause" calculates the cost for each h.o. set size 
       # as the number of deaths for each of them
       
-      if (cost_type == "deaths"){
-        if (b){
+      if (cost_type == "deaths") {
+        if (b) {
           deaths_boot_inter[b, i] <- sum(data_interv$Y == 1 & class_pred != 1)
           deaths_boot_ho[b, i] <- sum(data_hold$Y == 1 & dr_pred != 1)
         } else {
@@ -281,24 +284,29 @@ for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
         
         confus_hold <- table(factor(data_hold$Y, levels=0:1), 
                              factor(dr_pred, levels=0:1))
-        
-        if (b){
+      
+      # CAN SAVE MEMORY BY SAVING STRAIGHT AWAY INTO deaths_per_frac and _boot_tot
+      # BUT THEN I DON'T HAVE THEM SEPARATELY. CONSIDER FLAG?
+        if (b) {
           deaths_boot_inter[b, i] <- sum(confus_inter * cost_mat)
           deaths_boot_ho[b, i] <- sum(confus_hold * cost_mat)
-        } else {
+          deaths_boot_tot[dr_vars, b, i] <- deaths_boot_ho[b, i] + deaths_boot_inter[b, i]
+        } 
+        else {
           deaths_inter[i] <- sum(confus_inter * cost_mat)
           deaths_ho[i] <- sum(confus_hold * cost_mat)
+          deaths_per_frac[dr_vars, i] <- deaths_ho[i] + deaths_inter[i]
         }
       }
       
-      old_progress <- progress
     }
+    
+    old_progress <- progress
   }
-  
-  deaths_per_frac[dr_vars, ] <- deaths_ho + deaths_inter
-  deaths_boot_tot[dr_vars, ,] <- deaths_boot_ho + deaths_boot_inter
-  deaths_sd[dr_vars, ] <- apply(deaths_boot_tot[dr_vars,,], 2, sd)
 }
+
+for (dr_vars in 1:max_dr_vars) 
+  deaths_sd[dr_vars, i] <- apply(deaths_boot_tot[dr_vars,,], 2, sd)
 
 #deaths_per_frac <- deaths_ho + deaths_inter
 #deaths_boot_tot <- deaths_boot_ho + deaths_boot_inter
@@ -341,8 +349,10 @@ for (dr_vars in 1:max_dr_vars) {
          col = dr_vars)
 }
 
-legend("topleft", legend = (2 ** (0:(max_dr_vars - 1))), 
-       fill = 1:max_dr_vars, title = "sd")
+if (run_many_powers) {
+  legend("topleft", legend = (2 ** (0:(max_dr_vars - 1))), 
+         fill = 1:max_dr_vars, title = "sd")
+}
 
 # Plot using point estimates
 #plot(frac_ho, deaths_per_frac,
@@ -360,6 +370,30 @@ legend("topleft", legend = (2 ** (0:(max_dr_vars - 1))),
 #       frac_ho,
 #       deaths_per_frac + deaths_sd, 
 #       length = 0.05, angle = 90, code = 3)
+
+
+
+
+
+# -----------------------------------------------------------------------------#
+#### Analysis Plots ####
+
+#### Plot for 1/n behaviour of deaths in intervention set
+# THIS SHOWS WHAT I WANT BUT THE NORMALISATION IS WRONG. IT'S NOT THE ACTUAL
+# MISCLASSIFICATION ERROR IF I'M USING DEATHS, HAVE TO USE GEN COST WITH FN = FP = 1,
+# TP = TN = 0
+inv_x_behaviour <- (colMeans(deaths_boot_inter) / frac_ho) /
+                        max(colMeans(deaths_boot_inter) / frac_ho)
+plot(frac_ho, inv_x_behaviour, 
+     xlab = "holdout set size", 
+     ylab = "Normalised cost in intervention set")
+lines(frac_ho, (8 / frac_ho) / max(8 / frac_ho) - 0.022)
+lines(frac_ho, (8 / (frac_ho * nobs)))
+
+
+lin_x_behaviour <- (colMeans(deaths_boot_ho) / frac_ho)
+plot(frac_ho, lin_x_behaviour, col = 2)
+
 
 
 

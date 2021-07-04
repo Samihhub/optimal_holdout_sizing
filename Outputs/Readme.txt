@@ -9,5 +9,8 @@ Example trialing a sweep of the Dr's predictive power, i.e. simulation ran for w
 
 *Data7preds-drpreds_w_noise.svg:
 Same as above, but now rather than being an oracle, I introduced an increasing noise in the coefficients to simulate the predictions from Drs.
-For this, I used "coefs <- coefs + rnorm(npreds, sd = (num_vars - 1))" in the function oracle_pred.
+For this, I used "coefs <- coefs + rnorm(npreds, sd = (num_vars - 1))" in the function oracle_pred. Code in github 29/6/21
 Data saved in Data7preds-drpreds_w_noise.RData
+
+*Data7preds-drpreds_w_noise_2.svg:
+Exactly as above, but instead of 1,2,3,4,5; used 1, 2, 4, 8, 16 for the sd. Data in Data7preds-drpreds_w_noise_2.RData
