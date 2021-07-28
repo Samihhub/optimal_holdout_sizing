@@ -14,3 +14,9 @@ Data saved in Data7preds-drpreds_w_noise.RData
 
 *Data7preds-drpreds_w_noise_2.svg:
 Exactly as above, but instead of 1,2,3,4,5; used 1, 2, 4, 8, 16 for the sd. Data in Data7preds-drpreds_w_noise_2.RData
+
+*Data7preds-drpreds_noise_no_boot.svg:
+Same as the ones above but rather than using bootstrap estimates, calculating several point estimates and averaging them.
+
+*Data7preds_noise_no_boot.svg:
+No multiple powers, just one, and lines so that the minimum is easier to see

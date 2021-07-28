@@ -6,10 +6,6 @@
 
 # ---------------------------------------------------------------------------- #
 #### Package loading ####
-library("mlr3pipelines")
-library("mlr3tuning")
-library("mlr3filters")
-library("mlr3verse")
 library("dplyr")
 library("progress")
 
@@ -24,15 +20,21 @@ logit <- function(x) -log(1/x - 1)
 
 # Estimate Dr's predictions
 oracle_pred <- function(X, coefs, num_vars = 2){
-  # We model Dr behaviour as an oracle that knows the true relationship between
-  # predictors and responses, and limit its power by restricting the number of
-  # predictors Drs have access to.
+  # We model Dr behaviour as a logistic regression model that has access to the
+  # coefficients, with added noise to them, generating imperfect predictions.
+  # There is a double layer of indeterminism: firstly, the coefficients are
+  # recalculated with new noise every time the function is called, making each
+  # prediction different than previous ones; secondly, the returned classes are
+  # sampled from a binomial distribution. This is done this way to simulate
+  # the fact that human behaviour is not deterministic.
+  
+  # Flag to limit power by adding noise to coefficients or limit access to just a number of them
+  noise = TRUE 
   
   if ("Y" %in% colnames(X)) {
     X <- X %>% select(-Y)
   }
   
-  noise <- FALSE
   if (!noise) {
     X <- X %>% select(all_of(1:num_vars))
     nobs <- dim(X)[1]
@@ -44,15 +46,8 @@ oracle_pred <- function(X, coefs, num_vars = 2){
     coefs <- coefs + rnorm(npreds, sd = 2 ** (num_vars - 1))
   }
   
-  
-  
-  # Trying adding noise to make it harder for dr
   lin_comb <- rowSums(t(t(X) * coefs))
-  probs <- round(logistic(lin_comb))# + rnorm(nobs, sd = 0.2))
-  # Now check that the noise hasn't spoiled probabilities
-  # WITHOUT NOISE, THIS SHOULDN'T BE NEEDED (doesn't change anything tho)
-  probs[which(probs > 1)] = 1
-  probs[which(probs < 0)] = 0
+  probs <- logistic(lin_comb)
   
   return(rbinom(nobs, 1, probs))
 }
@@ -66,7 +61,7 @@ gen_preds <- function(nobs, npreds) {
 }
 
 
-# Generate samples of Y
+# Generate Y
 gen_resp <- function(X, coefs = NA, coefs_sd = 1, retprobs = FALSE) {
   # For now, combines predictors linearly and applies binomial to find class
   nobs <- dim(X)[1]
@@ -113,13 +108,15 @@ split_data <- function(X, frac) {
 set.seed(1234)
 
 # Initialisation of patient data
-boots <- 100      # Number of bootstrap resamplings
+boots <- 300      # Number of bootstrap resamplings
 nobs <- 5000                      # Number of observations, i.e patients
 nobs_boot <- 5000         # Number of observations to resample in each bootstrap iter
 npreds <- 7                    # Number of predictors
 
-max_dr_vars <- 1 # When testing different Dr predictive powers, maximum power to be tested
-run_many_powers <- FALSE # Flag for analysing several Dr powers at once
+
+# Flag and vars to generate multiple dr predictive powers.
+max_dr_vars <- 4 # When testing different Dr predictive powers, maximum power to be tested
+run_many_powers <- TRUE # Flag for analysing several Dr powers at once
 if(max_dr_vars > npreds) stop("max_dr_vars cannot be larger than npreds")
 if(max_dr_vars > 1 && !run_many_powers) stop("Flag set to run only 1 power, but max_dr_vars > 1")
 if(max_dr_vars == 1 && run_many_powers) stop("Flag set to run many powers, but max_dr_vars = 1")
@@ -129,6 +126,15 @@ if(max_dr_vars == 1 && run_many_powers) stop("Flag set to run many powers, but m
 min_frac <- 0.02
 max_frac <- 0.15
 num_sizes <- 50
+# Fraction of patients assigned to the holdout set
+frac_ho <- seq(min_frac, max_frac, length.out = num_sizes)
+
+
+
+
+frac_ho[length(frac_ho)] = 1
+
+
 
 
 # Variables for the threshold estimation
@@ -141,11 +147,6 @@ prob_vals <- seq(0, 1, length.out = num_thresh) # Vector with probability thresh
 thresh_vals <- seq()
 k <- 5 # Number of CV folds
 set_thresh <- TRUE # Flag to estimate classification threshold
-
-
-# Fraction of patients assigned to the holdout set
-frac_ho <- seq(min_frac, max_frac, length.out = num_sizes)
-dyn_cols = colorRampPalette(c("red", "blue"))(num_sizes) # Colour palette
 
 
 # Cost estimation
@@ -168,10 +169,10 @@ old_progress <- 0
 
 # Initialise Dataset
 set.seed(100)  
-X <- gen_preds(nobs, npreds)
-newdata <- gen_resp(X, coefs_sd = 6)
-Y <- newdata$classes
-coefs <- newdata$coefs
+#X <- gen_preds(nobs, npreds)
+#newdata <- gen_resp(X, coefs_sd = 6)
+#Y <- newdata$classes
+#coefs <- newdata$coefs
 
 
 # Arrays to store data from sweeping through Dr's different powers
@@ -180,8 +181,9 @@ deaths_boot_tot <- array(0, dim = c(max_dr_vars, boots, num_sizes))
 deaths_sd <- array(0, dim = c(max_dr_vars, num_sizes))
 
 
-### ATTENTION!!! TOO INEFFICIENT, NO NEED TO LOOP ON EVERYTHING, JUST ON DRS PREDS
-for (i in 1:num_sizes) {  # for each, sweep through h.o. set sizes of interest
+# ATTENTION!!!! THIS IS NO LONGER BOOTSTRAP BUT SEPARATE POINT ESTIMATES!!
+
+for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
   for (b in 0:boots) {  # b=0 is the point estimate, b>0 are bootstrap samples
     
     progress <- 100 * (((i - 1) * boots) + b) / (num_sizes * (boots + 1))
@@ -191,14 +193,24 @@ for (i in 1:num_sizes) {  # for each, sweep through h.o. set sizes of interest
       #for(aux in 1:abs(floor(old_progress) - floor(progress))) prog_bar$tick()
     }
     
-    set.seed(b + i*boots)
+    #set.seed(b + i*boots)
     thresh <- 0.5 # Decision boundary
     
-    # Resample Patient data
-    if (b) {
-      samp_mask <- sample(1:nobs, nobs_boot, replace = TRUE) # mask to resample data
-      pat_data <- cbind(X, Y)[samp_mask,]
-    } else pat_data <- cbind(X, Y)
+    X <- gen_preds(nobs, npreds)
+    newdata <- gen_resp(X, coefs_sd = 6)
+    Y <- newdata$classes
+    coefs <- newdata$coefs
+    
+    ## Resample Patient data
+    #if (b) {
+    #  samp_mask <- sample(1:nobs, nobs_boot, replace = TRUE) # mask to resample data
+    #  pat_data <- cbind(X, Y)[samp_mask,]
+    #} else pat_data <- cbind(X, Y)
+    
+    
+    
+           pat_data <- cbind(X, Y)
+    
     
     pat_data["Y"] <- lapply(pat_data["Y"], factor)
     
@@ -256,14 +268,21 @@ for (i in 1:num_sizes) {  # for each, sweep through h.o. set sizes of interest
     
     for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
       # Dr is an oracle for the first predictor and blind for the rest of them
-      if (run_many_powers) dr_pred <- oracle_pred(data_hold, coefs, num_vars = dr_vars)
+      if (run_many_powers) dr_pred <- oracle_pred(data_hold, 
+                                                  coefs, 
+                                                  num_vars = dr_vars)
       else dr_pred <- oracle_pred(data_hold, coefs)
+      
+      
+      
+      ##### CAREFUL HERE!!! CONSIDER USING THE THRESHOLD FOR H.O SET AS WELL, INSTEAD
+      ##### OF THE BERNOULLI DISTRIBUTION!!!!!!!!!!!
+      
       
       
       # Those with disease, predicted not to die, will die
       # This "if clause" calculates the cost for each h.o. set size 
       # as the number of deaths for each of them
-      
       if (cost_type == "deaths") {
         if (b) {
           deaths_boot_inter[b, i] <- sum(data_interv$Y == 1 & class_pred != 1)
@@ -337,21 +356,32 @@ for (dr_vars in 1:max_dr_vars)
 plot(frac_ho, deaths_per_frac[1,], type = "n", 
      #plot(costs, deaths_inter,
      pch = 16,
-     ylab = "Cost",
-     xlab = "Holdout set size",
+     ylab = "L",
+     xlab = expression(pi),
      #ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd)))
-     ylim = range(c(deaths_per_frac - deaths_sd, deaths_per_frac + deaths_sd), na.rm=T))
+     #ylim = range(colMeans(deaths_boot_tot[3,,]), na.rm=T)
+     ylim = c(1800, 1950)
+     )
 
-for (dr_vars in 1:max_dr_vars) {
-  points(frac_ho, 
+colours = c("#fcba03", "#59b7ff","", "#b51d27")
+
+for (dr_vars in c(1, 2, 4)){#1:max_dr_vars) {
+  #points(frac_ho, 
+  lines(frac_ho, 
          colMeans(deaths_boot_tot[dr_vars, , ], na.rm = T), 
          pch = 16, 
-         col = dr_vars)
+         lwd = 2,
+         col = colours[dr_vars])
+  points(frac_ho[which.min(colMeans(deaths_boot_tot[dr_vars, , ]))],
+         min(colMeans(deaths_boot_tot[dr_vars, , ])), 
+         na.rm = T,
+         pch = 4,
+         col = 1)
 }
 
 if (run_many_powers) {
-  legend("topleft", legend = (2 ** (0:(max_dr_vars - 1))), 
-         fill = 1:max_dr_vars, title = "sd")
+  legend("topleft", legend = (2 ** (c(0, 1, 3))), 
+         fill = c("#fcba03", "#59b7ff", "#b51d27"), title = expression(sigma))
 }
 
 # Plot using point estimates
@@ -396,16 +426,15 @@ plot(frac_ho, lin_x_behaviour, col = 2)
 
 
 
-
-# -----------------------------------------------------------------------------#
-#### Debugging snippets ####
-
 ###### Snippet for hist of probs
 set.seed(100)  
 npreds = 7
 X <- gen_preds(nobs, npreds)
 probs_hist <- gen_resp(X, retprobs = TRUE, coefs_sd = 6)
-hist(probs_hist)
+hist(probs_hist, 
+     xlab = "f(X)",
+     main = "")
+
 
 
 
