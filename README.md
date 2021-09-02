@@ -1,1 +1,1 @@
-# optimal_holdout_sizing
+Simulation for the estimation of the optimal holdout set size on a population where intervention is guided by a risk score. Part of the dissertation for the MSc in Scientific Computing and Data Science.
