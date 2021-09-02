@@ -1,13 +1,12 @@
 #### Simulation ####
 ## Simulation for the estimation of the optimal holdout set size ##
-## for intervention on a population, guided by a risk score      ##
+## on a population where intervention is guided by a risk score  ##
 
 # Ctrl+Alt+T to run section by section
 
 # ---------------------------------------------------------------------------- #
 #### Package loading ####
 library("dplyr")
-library("progress")
 
 
 
@@ -19,15 +18,23 @@ logistic <- function(x) 1/(1 + exp(-x))
 logit <- function(x) -log(1/x - 1)
 
 
-gen_dr_coefs <- function(coefs, noise = TRUE, num_vars = 3) {
+gen_dr_coefs <- function(coefs, noise = TRUE, num_vars = 2, max_dr_powers = 1) {
   if (!noise) {
-    coefs <- coefs[1:num_vars]
+    return(coefs[1:num_vars])
   } 
-  else {
-    coefs <- coefs + rnorm(length(coefs), sd = 2 ** (num_vars - 1))
+  
+  coefs_dr <- matrix(nrow = max_dr_powers, ncol = length(coefs))
+  
+  if (max_dr_powers - 1){
+    for (dr_vars in 1:max_dr_powers)
+      # If we are estimating the cost for more than one dr power, we use the ad-hoc
+      # formula below for the standard deviation
+      coefs_dr[dr_vars, ] <- coefs + rnorm(length(coefs), sd = 2 ** (dr_vars - 2))#1))
+  } else {
+    coefs_dr[1, ] <- coefs + rnorm(length(coefs), sd = 1)
   }
   
-  return(coefs)
+  return(coefs_dr)
 }
 
 
@@ -76,7 +83,7 @@ gen_resp <- function(X, coefs = NA, coefs_sd = 1, retprobs = FALSE) {
   
   # Generate coefficients for each predictor for the linear combination
   if (any(is.na(coefs))) {
-    denom <- npreds ** 0.48
+    denom <- npreds ** 0.5
     if (!denom) denom <- 1
     coefs <- rnorm(npreds, sd = coefs_sd/denom)
   }
@@ -114,18 +121,17 @@ split_data <- function(X, frac) {
 set.seed(1234)
 
 # Initialisation of patient data
-boots <- 200      # Number of bootstrap resamplings
+boots <- 8000      # Number of point estimates to be calculated
 nobs <- 5000                      # Number of observations, i.e patients
-nobs_boot <- 5000         # Number of observations to resample in each bootstrap iter
 npreds <- 7                    # Number of predictors
 
 
 # Flag and vars to generate multiple dr predictive powers.
-max_dr_vars <- 1 # When testing different Dr predictive powers, maximum power to be tested
-run_many_powers <- FALSE # Flag for analysing several Dr powers at once
-if(max_dr_vars > npreds) stop("max_dr_vars cannot be larger than npreds")
-if(max_dr_vars > 1 && !run_many_powers) stop("Flag set to run only 1 power, but max_dr_vars > 1")
-if(max_dr_vars == 1 && run_many_powers) stop("Flag set to run many powers, but max_dr_vars = 1")
+max_dr_powers <- 1 # When testing different Dr predictive powers, maximum power to be tested
+run_many_powers <- !(max_dr_powers == 1) # Flag for analysing several Dr powers at once
+if(max_dr_powers > npreds) stop("max_dr_powers cannot be larger than npreds")
+if(max_dr_powers > 1 && !run_many_powers) stop("Flag set to run only 1 power, but max_dr_powers > 1")
+if(max_dr_powers == 1 && run_many_powers) stop("Flag set to run many powers, but max_dr_powers = 1")
 
 
 # Definition of holdout set sizes to test
@@ -160,34 +166,29 @@ deaths_boot_inter <- deaths_boot_ho <- matrix(nrow = boots, ncol = num_sizes)
 deaths_inter <- deaths_ho <- seq()
 
 
-# Initialise Progress Bar
-#if (exists("prog_bar")) rm(prog_bar)
-#prog_bar <- progress_bar$new()
 old_progress <- 0
 
 
-# Initialise Dataset
+# Generate coefficients for underlying model and for predictions in h.o. set
 set.seed(107)  
 X <- gen_preds(nobs, npreds)
-#newdata <- gen_resp(X, coefs_sd = 6)
-#Y <- newdata$classes
 coefs_general <- gen_resp(X)$coefs
-coefs_dr <- gen_dr_coefs(coefs_general)
+coefs_dr <- gen_dr_coefs(coefs_general, max_dr_powers = max_dr_powers)
+
 
 # Arrays to store data from sweeping through Dr's different powers
-deaths_per_frac <- array(0, dim = c(max_dr_vars, num_sizes))
-deaths_boot_tot <- array(0, dim = c(max_dr_vars, boots, num_sizes))
-deaths_sd <- array(0, dim = c(max_dr_vars, num_sizes))
+deaths_per_frac <- array(0, dim = c(max_dr_powers, num_sizes))
+deaths_boot_tot <- array(0, dim = c(max_dr_powers, boots, num_sizes))
+deaths_sd <- array(0, dim = c(max_dr_powers, num_sizes))
 
 
 for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
-  for (b in 0:boots) {  # b=0 is the point estimate, b>0 are bootstrap samples
+  for (b in 1:boots) {
     
     progress <- 100 * (((i - 1) * boots) + b) / (num_sizes * (boots + 1))
     
     if (abs(floor(old_progress) - floor(progress)) > 0) {
       cat(floor(progress), "%\n")
-      #for(aux in 1:abs(floor(old_progress) - floor(progress))) prog_bar$tick()
     }
     
     set.seed(b + i*boots)
@@ -197,13 +198,6 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
     newdata <- gen_resp(X, coefs = coefs_general)
     Y <- newdata$classes
     coefs <- newdata$coefs
-    
-    ## Resample Patient data
-    #if (b) {
-    #  samp_mask <- sample(1:nobs, nobs_boot, replace = TRUE) # mask to resample data
-    #  pat_data <- cbind(X, Y)[samp_mask,]
-    #} else pat_data <- cbind(X, Y)
-    
     
     
     pat_data <- cbind(X, Y)
@@ -249,9 +243,6 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
     # Rescale loss
     cost_tot <- cost_tot / k
     
-    
-    # THIS NEEDS REWRITTING!!!!!!!!!
-    # CURRENT COSTS ARE CALCULATED WITH THRESHOLD ESTIMATION, EVEN WHEN FLAG IS OFF
     # Train model
     glm_model <- glm(Y ~ ., data = data_hold, 
                      family = binomial(link = "logit"))
@@ -263,18 +254,10 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
     class_pred <- ifelse(glm_pred > thresh, '1', '0')
     
     
-    for (dr_vars in 1:max_dr_vars) { # sweep through different dr predictive powers
+    for (dr_vars in 1:max_dr_powers) { # sweep through different dr predictive powers
       if (run_many_powers) dr_pred <- oracle_pred(data_hold, 
-                                                  coefs_dr, 
-                                                  num_vars = dr_vars)
-      else dr_pred <- oracle_pred(data_hold, coefs_dr)
-      
-      
-      
-      ##### CAREFUL HERE!!! CONSIDER USING THE THRESHOLD FOR H.O SET AS WELL, INSTEAD
-      ##### OF THE BERNOULLI DISTRIBUTION!!!!!!!!!!!
-      
-      
+                                        coefs_dr[dr_vars, ], num_vars = dr_vars)
+      else dr_pred <- oracle_pred(data_hold, coefs_dr[dr_vars, ])
       
       # Those with disease, predicted not to die, will die
       # This "if clause" calculates the cost for each h.o. set size 
@@ -300,8 +283,6 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
         confus_hold <- table(factor(data_hold$Y, levels=0:1), 
                              factor(dr_pred, levels=0:1))
       
-      # CAN SAVE MEMORY BY SAVING STRAIGHT AWAY INTO deaths_per_frac and _boot_tot
-      # BUT THEN I DON'T HAVE THEM SEPARATELY. CONSIDER FLAG?
         if (b) {
           deaths_boot_inter[b, i] <- sum(confus_inter * cost_mat)
           deaths_boot_ho[b, i] <- sum(confus_hold * cost_mat)
@@ -320,63 +301,96 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
   }
 }
 
-for (dr_vars in 1:max_dr_vars) 
-  deaths_sd[dr_vars, ] <- apply(deaths_boot_tot[dr_vars, , ], 2, sd)
+# Calculate Standard Deviations and Errors
+for (dr_vars in 1:max_dr_powers) {
+  deaths_sd[dr_vars, ] <- 
+    apply(deaths_boot_tot[dr_vars, , ], 2, sd)
+}
+deaths_se <- deaths_sd / sqrt(boots)
 
+
+
+
+# ---------------------------------------------------------------------------- #
+#### PLOTTING SECTION ####
+# Set plot to one subfigure and define colours
 par(mfrow = c(1, 1))
 
-# Test for multiple powers
+# Colours for plots
+reds <- c(0.07, 0.95, 0.22, 0.65)
+greens <- c(0.6, 0.7, 0.72, 0.1)
+blues <- c(0.85, 0, 0.25, 0.12)
+colours_line <- c()
+colours_fill <- c()
+
+for (i in 1:max_dr_powers) {
+  colours_line[i] <- as.character(rgb(red = reds[i], green = greens[i], blue = blues[i]))
+  colours_fill[i] <- as.character(rgb(red = reds[i], green = greens[i], blue = blues[i], alpha = 0.2))
+}
+
+
+# Create Figure
 plot(frac_ho, deaths_per_frac[1, ], type = "n", 
      ylab = "L",
      xlab = expression(pi),
-     ylim = c(min(deaths_per_frac - deaths_sd), max(deaths_per_frac + deaths_sd))
-     #ylim = range(colMeans(deaths_boot_tot[3,,]), na.rm=T)
+     ylim = c(min(colMeans(deaths_boot_tot[dr_vars, , ]) - deaths_sd[1, ]), 
+                  max(colMeans(deaths_boot_tot[dr_vars, , ]) + deaths_sd[1, ]))
+     #ylim = c(2025, 2125)
      )
 
-#colours = c("#fcba03", "#59b7ff","", "#b51d27")
 
-for (dr_vars in 1:max_dr_vars){#1:max_dr_vars) {
-  #points(frac_ho, 
+for (dr_vars in 1:max_dr_powers) {
+  # Plot Cost line
   lines(frac_ho, 
-         colMeans(deaths_boot_tot[dr_vars, , ], na.rm = T), 
-         pch = 16, 
-         lwd = 2,
-         col = dr_vars)
+        colMeans(deaths_boot_tot[dr_vars, , ]), 
+        pch = 16, 
+        lwd = 1,
+        col = colours_line[dr_vars])
+  
+  # Mark minima in plot
   points(frac_ho[which.min(colMeans(deaths_boot_tot[dr_vars, , ]))],
-         min(colMeans(deaths_boot_tot[dr_vars, , ])), 
-         na.rm = T,
+         min(colMeans(deaths_boot_tot[dr_vars, , ])),
          pch = 4,
          col = 1)
+  
+  # Plot SE bands
+  polygon(c(frac_ho, rev(frac_ho)), 
+          c(colMeans(deaths_boot_tot[dr_vars, , ]) - deaths_se[dr_vars, ], 
+              rev(colMeans(deaths_boot_tot[dr_vars, , ]) + deaths_se[dr_vars, ])),
+          col = colours_fill[dr_vars],
+          #rgb(red = reds[dr_vars], green = greens[dr_vars], blue = blues[dr_vars], alpha = 0.2),
+          border = NA)
 }
 
+
 if (run_many_powers) {
-  legend("topleft", legend = (2 ** (c(0, 1, 3))), 
-         fill = c("#fcba03", "#59b7ff", "#b51d27"), title = expression(sigma))
+  # Legend
+  legend("topleft", legend = (2 ** (1:max_dr_powers - 1)), 
+         fill = colours_line[1:max_dr_powers], title = expression(lambda))
+} else {
+  # Standard Deviation Bands, if only plotting 1 line 
+  polygon(c(frac_ho, rev(frac_ho)), 
+          c(colMeans(deaths_boot_tot[1,,]) - deaths_sd[1, ], 
+            rev(colMeans(deaths_boot_tot[1,,]) + deaths_sd[1, ])),
+          col = colours_fill[dr_vars],
+          #rgb(red = reds[dr_vars], green = greens[dr_vars], blue = blues[dr_vars], alpha = 0.2),
+          border = NA)
+  
+  # Legend
+  legend("topleft", legend = c("SD", "SEM"), 
+         fill = c(rgb(red = reds[1], green = greens[1], blue = blues[1], alpha = 0.2),
+                  rgb(red = reds[1], green = greens[1], blue = blues[1], alpha = 0.4)), 
+         #title = "Uncertainty"
+         )
 }
+
+
 
 
 
 
 # -----------------------------------------------------------------------------#
 #### Analysis Plots ####
-
-#### Plot for 1/n behaviour of deaths in intervention set
-# THIS SHOWS WHAT I WANT BUT THE NORMALISATION IS WRONG. IT'S NOT THE ACTUAL
-# MISCLASSIFICATION ERROR IF I'M USING DEATHS, HAVE TO USE GEN COST WITH FN = FP = 1,
-# TP = TN = 0
-inv_x_behaviour <- (colMeans(deaths_boot_inter) / frac_ho) /
-                        max(colMeans(deaths_boot_inter) / frac_ho)
-plot(frac_ho, inv_x_behaviour, 
-     xlab = "holdout set size", 
-     ylab = "Normalised cost in intervention set")
-lines(frac_ho, (8 / frac_ho) / max(8 / frac_ho) - 0.022)
-lines(frac_ho, (8 / (frac_ho * nobs)))
-
-
-lin_x_behaviour <- (colMeans(deaths_boot_ho) / frac_ho)
-plot(frac_ho, lin_x_behaviour, col = 2)
-
-
 
 ###### Snippet for hist of probs
 set.seed(107)  
@@ -400,59 +414,42 @@ hist(probs_hist[which(!as.logical(rbinom(nobs, 1, probs_hist)))],
 
 
 
-##### Snippet to test the threshold decision
-c_tn <- 0 # Cost of true neg
-c_tp <- 0.5 # Cost of true pos
-c_fp <- 0.5 # Cost of false pos
-c_fn <- 1 # Cost of false neg
-
-num_probs <- 10 # Number of porbabilities to scan
-prob_vals <- seq(0, 1, length.out = num_probs)
-cost_tot <- numeric(length(prob_vals))
 
 
-# Plot cost as a function of threshold
-for(i in 1:num_probs){
-  model_pred$set_threshold(prob_vals[i])
-  num_tp <- model_pred$confusion[1]
-  num_fn <- model_pred$confusion[2]
-  num_fp <- model_pred$confusion[3]
-  num_tn <- model_pred$confusion[4]
-  cost_tot[i] <- c_tn * num_tn + 
-    c_tp * num_tp + 
-    c_fn * num_fn + 
-    c_fp * num_fp
-}
-plot(prob_vals, cost_tot)
-cost_tot
+##### Fitting linear curve according to parametrisations from literature ####
+max_index <- 3
+test_inter <- colMeans(deaths_boot_inter) / (nobs * (1-frac_ho))
+df <- as.data.frame(cbind(frac_ho[1:max_index], test_inter[1:max_index]))
+colnames(df) <- c("V1", "V2")
+model_inter <- coef(nls(V2 ~ a / (V1 *nobs) + b, df, start = list(a = 8, b = 0.4)))
+
+test_ho <- colMeans(deaths_boot_ho) / (frac_ho * nobs)
+df2 <- as.data.frame(cbind(frac_ho, test_ho))
+colnames(df2) <- c("V1", "V2")
+fit_vals <- (model_inter[1] / (frac_ho * nobs) + model_inter[2]) * (nobs * (1-frac_ho)) + mean(test_ho) * nobs * frac_ho
+lines(frac_ho, fit_vals, col="#636363")
+
+min_fit <- which.min(fit_vals)
+# Mark minimum in plot
+points(frac_ho[min_fit],
+       fit_vals[min_fit],
+       pch = 4,
+       col = 2)
+frac_ho[min_fit]
 
 
-# Plot cost vs threshold case where FP are penalised beacuse too expensive
-for(i in 1:num_probs){
-  model_pred$set_threshold(prob_vals[i])
-  num_tp <- model_pred$confusion[1]
-  num_fn <- model_pred$confusion[2]
-  num_fp <- model_pred$confusion[3]
-  num_tn <- model_pred$confusion[4]
-  cost_tot[i] <- c_tn * num_tn + 
-    c_tp * num_tp + 
-    c_fn * num_fn + 
-    c_fp * num_fp * 4 
-}
-plot(prob_vals, cost_tot)
-cost_to
 
+plot(frac_ho, test_inter, 
+     pch = 16,
+     col = colours_line[dr_vars],
+     ylab = "Relative L",
+     xlab = expression(pi))
+lines(frac_ho, 1.92 / (frac_ho * nobs) + 0.400,
+     lwd = 2,
+     col = 2)
 
-plot(frac_ho, deaths_per_frac[1, ], type = "n", ylim = c(1500, 2100))
-
-lines(frac_ho, 
-               colMeans(deaths_boot_inter[ , ], na.rm = T), 
-               pch = 16, 
-               lwd = 2,
-               col = dr_vars)
-
-lines(frac_ho, 
-      colMeans(deaths_boot_ho[ , ] + 1500, na.rm = T), 
-      pch = 16, 
-      lwd = 2,
-      col = dr_vars)
+plot(frac_ho, test_ho, 
+     pch = 16,
+     col = colours_line[dr_vars],
+     ylab = "Relative L",
+     xlab = expression(pi))
