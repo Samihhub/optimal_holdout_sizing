@@ -7,6 +7,7 @@
 # ---------------------------------------------------------------------------- #
 #### Package loading ####
 library("dplyr")
+library("ranger")
 
 
 
@@ -15,8 +16,6 @@ library("dplyr")
 
 ## Model and Mathematical function Definitions
 logistic <- function(x) 1/(1 + exp(-x))
-logit <- function(x) -log(1/x - 1)
-
 
 gen_dr_coefs <- function(coefs, noise = TRUE, num_vars = 2, max_dr_powers = 1) {
   if (!noise) {
@@ -35,35 +34,6 @@ gen_dr_coefs <- function(coefs, noise = TRUE, num_vars = 2, max_dr_powers = 1) {
   }
   
   return(coefs_dr)
-}
-
-
-# Estimate Dr's predictions
-oracle_pred <- function(X, coefs, num_vars = 3, noise = TRUE) {
-  # We model Dr behaviour as a logistic regression model that has access to the
-  # coefficients, with added noise to them, generating imperfect predictions.
-  # There is a double layer of indeterminism: firstly, the coefficients are
-  # recalculated with new noise every time the function is called, making each
-  # prediction different than previous ones; secondly, the returned classes are
-  # sampled from a binomial distribution. This is done this way to simulate
-  # the fact that human behaviour is not deterministic.
-  
-  # Flag to limit power by adding noise to coefficients or limit access to just a number of them
-  
-  if ("Y" %in% colnames(X)) {
-    X <- X %>% select(-Y)
-  }
-  
-  if (!noise) {
-    X <- X %>% select(all_of(1:num_vars))
-  }
-  
-  nobs <- dim(X)[1]
-  
-  lin_comb <- rowSums(t(t(X) * coefs))
-  probs <- logistic(lin_comb)
-  
-  return(rbinom(nobs, 1, probs))
 }
 
 
@@ -101,6 +71,35 @@ gen_resp <- function(X, coefs = NA, coefs_sd = 1, retprobs = FALSE) {
 }
 
 
+# Estimate Dr's predictions
+oracle_pred <- function(X, coefs, num_vars = 3, noise = TRUE) {
+  # We model Dr behaviour as a logistic regression model that has access to the
+  # coefficients, with added noise to them, generating imperfect predictions.
+  # There is a double layer of indeterminism: firstly, the coefficients are
+  # recalculated with new noise every time the function is called, making each
+  # prediction different than previous ones; secondly, the returned classes are
+  # sampled from a binomial distribution. This is done this way to simulate
+  # the fact that human behaviour is not deterministic.
+  
+  # Flag to limit power by adding noise to coefficients or limit access to just a number of them
+  
+  if ("Y" %in% colnames(X)) {
+    X <- X %>% select(-Y)
+  }
+  
+  if (!noise) {
+    X <- X %>% select(all_of(1:num_vars))
+  }
+  
+  nobs <- dim(X)[1]
+  
+  lin_comb <- rowSums(t(t(X) * coefs))
+  probs <- logistic(lin_comb)
+  
+  return(rbinom(nobs, 1, probs))
+}
+
+
 # Split dataset into holdout and intervention set
 split_data <- function(X, frac) {
   # Returns a mask for the observations belonging in the training (holdout) set
@@ -113,6 +112,41 @@ split_data <- function(X, frac) {
 }
 
 
+# Wrapper function to train model independently of chosen model to study
+model_train <- function(train_data, model_family = "log_reg") {
+  # Takes training data and the model family, returns a model trained on that data
+  # Options:
+  # log_reg for logistic regression
+  # rand_forest for random forest
+  
+  if (model_family == "log_reg"){
+    model <- glm(Y ~ ., data = train_data, family = binomial(link = "logit"))
+  } else if (model_family == "rand_forest") {
+    model <- ranger(Y ~ ., data = train_data, probability = TRUE)
+  }
+  
+  return(model)
+}
+
+
+# Wrapper function to predict outcome for new data. Necessary as different models have 
+# different calls to predict()
+model_predict <- function(data_test, trained_model, return_type, threshold = NULL, model_family = NULL) {
+  if (model_family == "log_reg") {
+    predictions <- predict(trained_model, newdata = data_test, type = "response")
+  } else if (model_family == "rand_forest") {
+    predictions <- predict(trained_model, data = data_test, type = 'response')$predictions[ ,2]
+  } else if (is.null(model_family)) {
+    stop("model_predict: Please provide a correct model family")
+  }
+  
+  if (return_type == "class") {
+    return(ifelse(predictions > threshold, '1', '0'))
+  } else if(return_type == "probs"){
+    return(predictions)
+  } else stop("model_predict: Wrong return type. Specify in return_type")
+}
+
 
 # -----------------------------------------------------------------------------#
 #### Dynamics of the system ####
@@ -121,9 +155,10 @@ split_data <- function(X, frac) {
 set.seed(1234)
 
 # Initialisation of patient data
-boots <- 8000      # Number of point estimates to be calculated
+boots <- 10      # Number of point estimates to be calculated
 nobs <- 5000                      # Number of observations, i.e patients
-npreds <- 7                    # Number of predictors
+npreds <- 5                    # Number of predictors
+family <- "rand_forest" # Model family
 
 
 # Flag and vars to generate multiple dr predictive powers.
@@ -137,7 +172,7 @@ if(max_dr_powers == 1 && run_many_powers) stop("Flag set to run many powers, but
 # Definition of holdout set sizes to test
 min_frac <- 0.02
 max_frac <- 0.15
-num_sizes <- 50
+num_sizes <- 6
 # Fraction of patients assigned to the holdout set
 frac_ho <- seq(min_frac, max_frac, length.out = num_sizes)
 
@@ -221,11 +256,11 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
       val_data <- data_hold[val_indices,]
       partial_train_data <- data_hold[!val_indices,]
       
-      thresh_model <- glm(Y ~ ., data = partial_train_data, 
-                          family = binomial(link = "logit"))
+      thresh_model <- model_train(partial_train_data, model_family = family)
       
-      thresh_pred <- predict(thresh_model, newdata = val_data, 
-                             type = "response")
+      thresh_pred <- model_predict(val_data, thresh_model, return_type = "probs",
+                                   model_family = family)
+      
       
       for(p in 1:num_thresh) {
         num_tn <- sum(as.numeric(val_data["Y"] == 0) & as.numeric(thresh_pred < prob_vals[p]))
@@ -244,19 +279,21 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
     cost_tot <- cost_tot / k
     
     # Train model
-    glm_model <- glm(Y ~ ., data = data_hold, 
-                     family = binomial(link = "logit"))
+    trained_model <- model_train(data_hold, model_family = family)
+    #glm(Y ~ ., data = data_hold, family = binomial(link = "logit"))
     thresh <- ifelse(set_thresh, prob_vals[which.min(cost_tot)], 0.5)
     if (b) costs_boot[b, i] <- min(cost_tot) else costs <- min(cost_tot)
     
     # Predict
-    glm_pred <- predict(glm_model, newdata = data_interv, type = "response")
-    class_pred <- ifelse(glm_pred > thresh, '1', '0')
+    #model_probs <- predict(trained_model, newdata = data_interv, type = "response")
+    #class_pred <- ifelse(model_probs > thresh, '1', '0')
+    class_pred <- model_predict(data_interv, trained_model, return_type = "class", threshold = thresh, model_family = family)
+    
     
     
     for (dr_vars in 1:max_dr_powers) { # sweep through different dr predictive powers
       if (run_many_powers) dr_pred <- oracle_pred(data_hold, 
-                                        coefs_dr[dr_vars, ], num_vars = dr_vars)
+                                                  coefs_dr[dr_vars, ], num_vars = dr_vars)
       else dr_pred <- oracle_pred(data_hold, coefs_dr[dr_vars, ])
       
       # Those with disease, predicted not to die, will die
@@ -278,11 +315,11 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
       if (cost_type == "gen_cost"){
         # Generate confusion matrices
         confus_inter <- table(factor(data_interv$Y, levels=0:1), 
-                               factor(class_pred, levels=0:1))
+                              factor(class_pred, levels=0:1))
         
         confus_hold <- table(factor(data_hold$Y, levels=0:1), 
                              factor(dr_pred, levels=0:1))
-      
+        
         if (b) {
           deaths_boot_inter[b, i] <- sum(confus_inter * cost_mat)
           deaths_boot_ho[b, i] <- sum(confus_hold * cost_mat)
@@ -334,9 +371,9 @@ plot(frac_ho, deaths_per_frac[1, ], type = "n",
      ylab = "L",
      xlab = expression(pi),
      ylim = c(min(colMeans(deaths_boot_tot[dr_vars, , ]) - deaths_sd[1, ]), 
-                  max(colMeans(deaths_boot_tot[dr_vars, , ]) + deaths_sd[1, ]))
+              max(colMeans(deaths_boot_tot[dr_vars, , ]) + deaths_sd[1, ]))
      #ylim = c(2025, 2125)
-     )
+)
 
 
 for (dr_vars in 1:max_dr_powers) {
@@ -356,7 +393,7 @@ for (dr_vars in 1:max_dr_powers) {
   # Plot SE bands
   polygon(c(frac_ho, rev(frac_ho)), 
           c(colMeans(deaths_boot_tot[dr_vars, , ]) - deaths_se[dr_vars, ], 
-              rev(colMeans(deaths_boot_tot[dr_vars, , ]) + deaths_se[dr_vars, ])),
+            rev(colMeans(deaths_boot_tot[dr_vars, , ]) + deaths_se[dr_vars, ])),
           col = colours_fill[dr_vars],
           #rgb(red = reds[dr_vars], green = greens[dr_vars], blue = blues[dr_vars], alpha = 0.2),
           border = NA)
@@ -381,7 +418,7 @@ if (run_many_powers) {
          fill = c(rgb(red = reds[1], green = greens[1], blue = blues[1], alpha = 0.2),
                   rgb(red = reds[1], green = greens[1], blue = blues[1], alpha = 0.4)), 
          #title = "Uncertainty"
-         )
+  )
 }
 
 
@@ -445,8 +482,8 @@ plot(frac_ho, test_inter,
      ylab = "Relative L",
      xlab = expression(pi))
 lines(frac_ho, 1.92 / (frac_ho * nobs) + 0.400,
-     lwd = 2,
-     col = 2)
+      lwd = 2,
+      col = 2)
 
 plot(frac_ho, test_ho, 
      pch = 16,
