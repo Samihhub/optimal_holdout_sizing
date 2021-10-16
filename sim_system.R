@@ -38,9 +38,14 @@ gen_dr_coefs <- function(coefs, noise = TRUE, num_vars = 2, max_dr_powers = 1) {
 
 
 # Generate the predictors matrix
-gen_preds <- function(nobs, npreds) {
+gen_preds <- function(nobs, npreds, ninters = 0) {
   # Generate gaussian covariates matrix
   X <- as.data.frame(matrix( rnorm(nobs * npreds), nobs, npreds))
+  
+  for (i in 1:ninters) {
+    X[, npreds + i] <- X[, i] * X[, i + 1]
+  }
+  
   return(X)
 }
 
@@ -158,6 +163,8 @@ set.seed(1234)
 boots <- 10      # Number of point estimates to be calculated
 nobs <- 5000                      # Number of observations, i.e patients
 npreds <- 5                    # Number of predictors
+ninters <- 3  # Number of interactions between variables
+if(ninters + 1 > npreds) stop("PLACEHOLDER. Please make ninters + 1 <= npreds")
 family <- "rand_forest" # Model family
 
 
@@ -172,7 +179,7 @@ if(max_dr_powers == 1 && run_many_powers) stop("Flag set to run many powers, but
 # Definition of holdout set sizes to test
 min_frac <- 0.02
 max_frac <- 0.15
-num_sizes <- 6
+num_sizes <- 25
 # Fraction of patients assigned to the holdout set
 frac_ho <- seq(min_frac, max_frac, length.out = num_sizes)
 
@@ -206,7 +213,7 @@ old_progress <- 0
 
 # Generate coefficients for underlying model and for predictions in h.o. set
 set.seed(107)  
-X <- gen_preds(nobs, npreds)
+X <- gen_preds(nobs, npreds, ninters)
 coefs_general <- gen_resp(X)$coefs
 coefs_dr <- gen_dr_coefs(coefs_general, max_dr_powers = max_dr_powers)
 
@@ -229,7 +236,7 @@ for (i in 1:num_sizes) {  # sweep through h.o. set sizes of interest
     set.seed(b + i*boots)
     thresh <- 0.5 # Decision boundary
     
-    X <- gen_preds(nobs, npreds)
+    X <- gen_preds(nobs, npreds, ninters)
     newdata <- gen_resp(X, coefs = coefs_general)
     Y <- newdata$classes
     coefs <- newdata$coefs
