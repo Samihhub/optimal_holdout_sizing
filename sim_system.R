@@ -163,7 +163,7 @@ set.seed(1234)
 boots <- 10      # Number of point estimates to be calculated
 nobs <- 5000                      # Number of observations, i.e patients
 npreds <- 5                    # Number of predictors
-ninters <- 3  # Number of interactions between variables
+ninters <- 3  # Number of interactions terms. 0 for no interactions at all
 if(ninters + 1 > npreds) stop("PLACEHOLDER. Please make ninters + 1 <= npreds")
 family <- "rand_forest" # Model family
 
