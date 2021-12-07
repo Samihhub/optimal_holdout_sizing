@@ -160,10 +160,10 @@ model_predict <- function(data_test, trained_model, return_type, threshold = NUL
 set.seed(1234)
 
 # Initialisation of patient data
-boots <- 10      # Number of point estimates to be calculated
+boots <- 8000      # Number of point estimates to be calculated
 nobs <- 5000                      # Number of observations, i.e patients
-npreds <- 5                    # Number of predictors
-ninters <- 3  # Number of interactions terms. 0 for no interactions at all
+npreds <- 7                    # Number of predictors
+#ninters <- 3  # Number of interactions terms. 0 for no interactions at all
 if(ninters + 1 > npreds) stop("PLACEHOLDER. Please make ninters + 1 <= npreds")
 family <- "rand_forest" # Model family
 
@@ -179,7 +179,7 @@ if(max_dr_powers == 1 && run_many_powers) stop("Flag set to run many powers, but
 # Definition of holdout set sizes to test
 min_frac <- 0.02
 max_frac <- 0.15
-num_sizes <- 25
+num_sizes <- 50
 # Fraction of patients assigned to the holdout set
 frac_ho <- seq(min_frac, max_frac, length.out = num_sizes)
 
@@ -433,67 +433,67 @@ if (run_many_powers) {
 
 
 
-# -----------------------------------------------------------------------------#
-#### Analysis Plots ####
-
-###### Snippet for hist of probs
-set.seed(107)  
-npreds = 7
-X <- gen_preds(nobs, npreds)
-probs_hist <- gen_resp(X, retprobs = TRUE, coefs_sd = 1)
-
-par(mfrow = c(1, 3))
-
-hist(probs_hist, 
-     xlab = "f(X)",
-     main = "Hist of all samples")
-
-hist(probs_hist[which(as.logical(rbinom(nobs, 1, probs_hist)))], 
-     xlab = "f(X)",
-     main = "Hist of Y=1")
-
-hist(probs_hist[which(!as.logical(rbinom(nobs, 1, probs_hist)))], 
-     xlab = "f(X)",
-     main = "Hist of Y=0")
-
-
-
-
-
-##### Fitting linear curve according to parametrisations from literature ####
-max_index <- 3
-test_inter <- colMeans(deaths_boot_inter) / (nobs * (1-frac_ho))
-df <- as.data.frame(cbind(frac_ho[1:max_index], test_inter[1:max_index]))
-colnames(df) <- c("V1", "V2")
-model_inter <- coef(nls(V2 ~ a / (V1 *nobs) + b, df, start = list(a = 8, b = 0.4)))
-
-test_ho <- colMeans(deaths_boot_ho) / (frac_ho * nobs)
-df2 <- as.data.frame(cbind(frac_ho, test_ho))
-colnames(df2) <- c("V1", "V2")
-fit_vals <- (model_inter[1] / (frac_ho * nobs) + model_inter[2]) * (nobs * (1-frac_ho)) + mean(test_ho) * nobs * frac_ho
-lines(frac_ho, fit_vals, col="#636363")
-
-min_fit <- which.min(fit_vals)
-# Mark minimum in plot
-points(frac_ho[min_fit],
-       fit_vals[min_fit],
-       pch = 4,
-       col = 2)
-frac_ho[min_fit]
-
-
-
-plot(frac_ho, test_inter, 
-     pch = 16,
-     col = colours_line[dr_vars],
-     ylab = "Relative L",
-     xlab = expression(pi))
-lines(frac_ho, 1.92 / (frac_ho * nobs) + 0.400,
-      lwd = 2,
-      col = 2)
-
-plot(frac_ho, test_ho, 
-     pch = 16,
-     col = colours_line[dr_vars],
-     ylab = "Relative L",
-     xlab = expression(pi))
+# # -----------------------------------------------------------------------------#
+# #### Analysis Plots ####
+# 
+# ###### Snippet for hist of probs
+# set.seed(107)  
+# npreds = 7
+# X <- gen_preds(nobs, npreds)
+# probs_hist <- gen_resp(X, retprobs = TRUE, coefs_sd = 1)
+# 
+# par(mfrow = c(1, 3))
+# 
+# hist(probs_hist, 
+#      xlab = "f(X)",
+#      main = "Hist of all samples")
+# 
+# hist(probs_hist[which(as.logical(rbinom(nobs, 1, probs_hist)))], 
+#      xlab = "f(X)",
+#      main = "Hist of Y=1")
+# 
+# hist(probs_hist[which(!as.logical(rbinom(nobs, 1, probs_hist)))], 
+#      xlab = "f(X)",
+#      main = "Hist of Y=0")
+# 
+# 
+# 
+# 
+# 
+# ##### Fitting linear curve according to parametrisations from literature ####
+# max_index <- 3
+# test_inter <- colMeans(deaths_boot_inter) / (nobs * (1-frac_ho))
+# df <- as.data.frame(cbind(frac_ho[1:max_index], test_inter[1:max_index]))
+# colnames(df) <- c("V1", "V2")
+# model_inter <- coef(nls(V2 ~ a / (V1 *nobs) + b, df, start = list(a = 8, b = 0.4)))
+# 
+# test_ho <- colMeans(deaths_boot_ho) / (frac_ho * nobs)
+# df2 <- as.data.frame(cbind(frac_ho, test_ho))
+# colnames(df2) <- c("V1", "V2")
+# fit_vals <- (model_inter[1] / (frac_ho * nobs) + model_inter[2]) * (nobs * (1-frac_ho)) + mean(test_ho) * nobs * frac_ho
+# lines(frac_ho, fit_vals, col="#636363")
+# 
+# min_fit <- which.min(fit_vals)
+# # Mark minimum in plot
+# points(frac_ho[min_fit],
+#        fit_vals[min_fit],
+#        pch = 4,
+#        col = 2)
+# frac_ho[min_fit]
+# 
+# 
+# 
+# plot(frac_ho, test_inter, 
+#      pch = 16,
+#      col = colours_line[dr_vars],
+#      ylab = "Relative L",
+#      xlab = expression(pi))
+# lines(frac_ho, 1.92 / (frac_ho * nobs) + 0.400,
+#       lwd = 2,
+#       col = 2)
+# 
+# plot(frac_ho, test_ho, 
+#      pch = 16,
+#      col = colours_line[dr_vars],
+#      ylab = "Relative L",
+#      xlab = expression(pi))
